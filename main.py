@@ -1,9 +1,27 @@
 import logging
 import random
 import time
+import os
+from threading import Thread
+from flask import Flask
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
+
+# --- SERVEUR WEB DUMMY POUR RENDER ---
+app_web = Flask('')
+
+@app_web.route('/')
+def home():
+    return "Bot en cours d'exécution !"
+
+def run_web():
+    port = int(os.environ.get('PORT', 8080))
+    app_web.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
 
 # --- CONFIGURATION ---
 OWNER_ID = 6559674906
@@ -556,6 +574,9 @@ async def historique(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- PROGRAMME PRINCIPAL ---
 
 if __name__ == '__main__':
+    # Démarre le serveur Web en arrière-plan pour Render
+    keep_alive()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     # Handlers Utilisateurs & Économie
