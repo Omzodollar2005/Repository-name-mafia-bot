@@ -1,78 +1,90 @@
 import logging
 import random
 import time
-import os
-from threading import Thread
-from flask import Flask
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 
-# --- SERVEUR WEB DUMMY POUR RENDER ---
-app_web = Flask('')
-
-@app_web.route('/')
-def home():
-    return "Bot en cours d'exécution !"
-
-def run_web():
-    port = int(os.environ.get('PORT', 8080))
-    app_web.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_web) 
-    t.start()
-
 # --- CONFIGURATION ---
 OWNER_ID = 6559674906
-TOKEN = "8027243153:AAHPDVZopFBaNWbiEN-kQegV4gHVy2kOBvY"
+TOKEN = "8027243153:AAGlT6vipsIQs2V9fw_uFF_-d30x45hDFQg"
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- BASE DE DONNÉES EN MÉMOIRE ---
 joueurs = {}
-entreprises = {}
 banned_users = set()
 admins = set([OWNER_ID])
 etat_tresor = 50000000
-caisse_ville = 10000000
-elections = {'active': False, 'candidats': [], 'votes': {}, 'maire': None, 'commission': None}
 historique_transactions = []
 
-IMMOBILIER_SHOP = {
-    'studio': {'nom': '🏡 Studio', 'prix': 5000, 'loyer': 450},
-    'appartement': {'nom': '🏢 Appartement', 'prix': 20000, 'loyer': 1800},
-    'maison': {'nom': '🏡 Maison', 'prix': 60000, 'loyer': 5400},
-    'villa': {'nom': '🏰 Villa de luxe', 'prix': 200000, 'loyer': 18000},
-    'immeuble': {'nom': '🏙️ Immeuble', 'prix': 750000, 'loyer': 66000}
+# --- GESTION DE LA MAIRIE (CONTRÔLE TOTAL PAR L'OWNER) ---
+mairie_state = {
+    'maire_id': None,       # ID du joueur actuellement maire
+    'maire_nom': "Aucun",   # Nom du maire
+    'caisse_ville': 1000000000 # Trésorerie de la ville gérable par le maire/owner
+}
+
+# --- LES 5 DOMAINES DE DIPLÔMES ET LEURS QUESTIONS ---
+DOMAINES_DIPLOMES = {
+    'informatique': {
+        'nom': '💻 Informatique & Tech',
+        'questions': [
+            {"q": "Quel langage est principalement utilisé pour l'Intelligence Artificielle ?", "options": ["Python", "HTML", "CSS"], "correct": 0},
+            {"q": "Que signifie 'HTML' ?", "options": ["HyperText Markup Language", "High Technical Modern Level", "Home Tool Multi Language"], "correct": 0},
+            {"q": "Quel composant est le 'cerveau' de l'ordinateur ?", "options": ["Disque Dur", "Processeur (CPU)", "Carte Graphique"], "correct": 1}
+        ]
+    },
+    'finance': {
+        'nom': '📈 Finance & Économie',
+        'questions': [
+            {"q": "Qu'est-ce qu'une action en bourse ?", "options": ["Une part de propriété d'une entreprise", "Un emprunt bancaire", "Une taxe d'État"], "correct": 0},
+            {"q": "Que mesure l'inflation ?", "options": ["La hausse générale des prix", "La vitesse d'Internet", "La croissance de la population"], "correct": 0},
+            {"q": "Où s'achètent et se vendent les cryptomonnaies ?", "options": ["Sur une plateforme / exchange", "À la boulangerie", "Au tribunal"], "correct": 0}
+        ]
+    },
+    'droit': {
+        'nom': '⚖️ Droit & Justice',
+        'questions': [
+            {"q": "Quel texte fixe les lois fondamentales d'un pays ?", "options": ["La Constitution", "Un roman policier", "Le manuel de cuisine"], "correct": 0},
+            {"q": "Qui prononce le verdict lors d'un procès ?", "options": ["Le Juge", "Le Boulanger", "Le Banquier"], "correct": 0},
+            {"q": "Que signifie 'présomption d'innocence' ?", "options": ["On est innocent jusqu'à preuve du contraire", "On est coupable d'office", "Tout le monde ment"], "correct": 0}
+        ]
+    },
+    'management': {
+        'nom': '👔 Management & Business',
+        'questions': [
+            {"q": "Quel est le rôle principal d'un PDG ?", "options": ["Diriger la stratégie de l'entreprise", "Nettoyer les bureaux", "Faire du café"], "correct": 0},
+            {"q": "Qu'est-ce que le 'chiffre d'affaires' ?", "options": ["Le total des ventes avant déduction des charges", "Le bénéfice net", "Le salaire du patron"], "correct": 0},
+            {"q": "Que gère les Ressources Humaines (RH) ?", "options": ["Le personnel et le recrutement", "La météo", "Les serveurs informatiques"], "correct": 0}
+        ]
+    },
+    'sante': {
+        'nom': '🏥 Santé & Médecine',
+        'questions': [
+            {"q": "Quel organe pompe le sang dans le corps humain ?", "options": ["Le Cœur", "Le Foie", "L'Estomac"], "correct": 0},
+            {"q": "Combien de paires de chromosomes possède l'humain en général ?", "options": ["23", "10", "50"], "correct": 0},
+            {"q": "Quel professionnel de santé soigne les dents ?", "options": ["Le Dentiste", "L'Ophtalmologue", "Le Cardiologue"], "correct": 0}
+        ]
+    }
 }
 
 def get_player(user_id, name="Joueur"):
     if user_id not in joueurs:
         joueurs[user_id] = {
             'name': name,
-            'cash': 500000,  # Solde de départ fixé à 500 000$
+            'cash': 50000,
             'banks': {'Death': 0, 'Life': 0, 'Nova': 0},
-            'loans': [],
-            'spouse': None,
-            'pending_marry': None,
-            'family_name': None,
-            'children': [],
-            'pending_adopt': None,
-            'friends': [],
-            'pending_friend': None,
-            'diplomes': ['Bac'],
+            'diplomes': [],
             'entreprise': None,
-            'parts': {},
             'immobilier': [],
-            'items': [],
             'security': 0,
-            'in_jail': False,
             'last_work': None,
             'last_daily': None,
-            'last_rent': None,
-            'work_count': 0
+            'active_exam': None
         }
+    else:
+        joueurs[user_id]['name'] = name
     return joueurs[user_id]
 
 def is_admin(user_id):
@@ -81,86 +93,42 @@ def is_admin(user_id):
 def log_trans(txt):
     historique_transactions.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M')}] {txt}")
 
-# --- COMMANDES DE BASE & PROFIL ---
+# --- COMMANDES DE BASE ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     get_player(u.id, u.first_name)
     await update.message.reply_text(
-        f"👑 **Bienvenue dans Empire City / Empire Mafia, {u.first_name} !**\n\n"
-        f"💰 Un bonus de démarrage de **500 000 $** a été crédité sur ton compte.\n"
-        f"Tape /help pour consulter toutes les commandes disponibles.",
+        f"👑 **Bienvenue dans Empire City, {u.first_name} !**\n\n"
+        f"Passe tes diplômes, monte ta boîte et respecte l'autorité suprême de la ville.\n"
+        f"Tape /help pour consulter les commandes.",
         parse_mode="Markdown"
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "📜 **Commandes Empire City / Empire Mafia**\n\n"
+        "📜 **Commandes Empire City**\n\n"
         "👤 **Profil & Économie**\n"
-        "/start — Créer son compte (Bonus: 500 000 $)\n"
         "/me — Voir son profil\n"
         "/acc — Voir son solde\n"
-        "/daily — Bonus quotidien\n"
-        "/work — Travailler (Cooldown 5h)\n"
-        "/pay @user montant — Envoyer de l'argent\n"
-        "/richlist — Top 10 des plus riches\n"
-        "/leaderboard — Classement des familles\n"
-        "/topactif — Top 15 joueurs actifs\n\n"
+        "/work — Travailler\n"
+        "/daily — Bonus quotidien\n\n"
 
-        "🏦 **Banque & Prêts**\n"
-        "/bank — Liste des banques\n"
-        "/openbank nom — Ouvrir un compte (Death, Life, Nova)\n"
-        "/depositbank montant banque — Déposer de l'argent\n"
-        "/withdrawbank montant banque — Retirer de l'argent\n"
-        "/balancebank — Afficher les soldes bancaires\n"
-        "/loanbank montant — Prêt bancaire\n"
-        "/repaybank montant — Rembourser prêt\n"
-        "/loansbank — Prêts en cours\n\n"
+        "🎓 **Diplômes**\n"
+        "/diplome — Passer un examen dans l'un des 5 domaines\n\n"
 
-        "🏠 **Immobilier & Loyers**\n"
-        "/immobilier — Marché immobilier interactif avec boutons\n"
-        "/loyer — Récolter les loyers des biens possédés\n\n"
-
-        "👨‍👩‍👧‍👦 **Famille & Social**\n"
-        "/marry @user — Demande en mariage\n"
-        "/acceptmarry — Accepter le mariage\n"
-        "/divorce — Divorcer\n"
-        "/adopt @user — Proposer l'adoption\n"
-        "/acceptadopt — Accepter l'adoption\n"
-        "/disown @user — Désavouer\n"
-        "/friend @user — Demande d'ami\n"
-        "/acceptfriend — Accepter une demande d'ami\n"
-        "/unfriend @user — Retirer un ami\n"
-        "/setfamilyname nom — Nom de famille\n"
-        "/leave — Quitter sa famille\n"
-        "/tree — Arbre généalogique\n\n"
-
-        "🎓 **Éducation**\n"
-        "/diplome — Passer ou voir ses diplômes\n\n"
-
-        "🏢 **Entreprises & Parts**\n"
-        "/creerboite nom secteur ville — Créer une boîte (50M$)\n"
-        "/listeboites — Toutes les entreprises\n"
-        "/infoboite nom — Infos entreprise\n"
+        "🏢 **Entreprises & Salaires**\n"
+        "/creerboite nom — Créer une boîte (5M€ + Diplôme requis)\n"
         "/monentreprise — Ma boîte\n"
-        "/postuler nom — Postuler dans une boîte\n"
-        "/demissionner — Démissionner\n"
-        "/recruter @user — Recruter un employé\n"
-        "/licencier @user — Licencier un employé\n"
-        "/parts — Répartition des parts\n"
-        "/mesparts — Mes parts d'entreprises\n"
-        "/acheterparts nom nombre — Acheter des parts\n"
-        "/vendreparts nom nombre — Vendre des parts\n\n"
+        "/setsalaire montant — Fixer le salaire\n"
+        "/versesalaire — Verser le salaire\n\n"
 
-        "🎰 **Casino Solo & PvP**\n"
-        "/slots montant | /roulette montant | /mines montant | /crash montant\n"
-        "/apple montant | /roue montant | /rebet — Rejouer dernier pari\n"
-        "/blackjack montant | /cockfight montant | /ppc choix montant | /lancer montant\n\n"
+        "🏛️ **Mairie**\n"
+        "/mairie — Voir le maire actuel et la caisse de la ville\n\n"
 
-        "🔫 **Crime & Police**\n"
-        "/steal @user | /police @user | /bail | /juge | /security niveau\n"
-        "/bid montant | /myitems | /sellitem | /shopitems | /buyitem | /open\n\n"
-        "👑 **/owner** — Panel Administrateur Owner"
+        "👑 **Commandes Owner (Réservé à toi)**\n"
+        "/setmaire <user_id> — Nommer directement le maire\n"
+        "/owner — Panel d'administration complet"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -168,320 +136,242 @@ async def me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     p = get_player(u.id, u.first_name)
     total_bank = sum(p['banks'].values())
+    ent_nom = p['entreprise']['nom'] if p['entreprise'] else 'Aucune'
+    diplomes_str = ", ".join(p['diplomes']) if p['diplomes'] else 'Aucun'
+
     msg = (
-        f"👤 **Profil de {u.first_name} — Empire City**\n\n"
-        f"💵 **Cash :** {p['cash']:,} $\n"
-        f"🏦 **Total Banque :** {total_bank:,} $\n"
-        f"💍 **Partenaire :** {p['spouse'] if p['spouse'] else 'Célibataire'}\n"
-        f"🏰 **Nom de Famille :** {p['family_name'] if p['family_name'] else 'Aucun'}\n"
-        f"🎓 **Diplômes :** {', '.join(p['diplomes']) if p['diplomes'] else 'Aucun'}\n"
-        f"🏢 **Entreprise :** {p['entreprise'] if p['entreprise'] else 'Aucune'}\n"
-        f"🏠 **Biens Immobiliers :** {len(p['immobilier'])}\n"
-        f"🛡️ **Niveau de Sécurité :** {p['security']}"
+        f"👤 **Profil de {u.first_name}**\n\n"
+        f"💵 **Cash :** {p['cash']:,} €\n"
+        f"🏦 **Banque :** {total_bank:,} €\n"
+        f"🎓 **Diplômes :** {diplomes_str}\n"
+        f"🏢 **Entreprise :** {ent_nom}"
     )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = get_player(update.effective_user.id)
-    await update.message.reply_text(f"💰 **Portefeuille actuel :** {p['cash']:,} $", parse_mode="Markdown")
-
-# --- SYSTÈME WORK (TRAVAIL AVEC COOLDOWN DE 5 HEURES) ---
+    await update.message.reply_text(f"💰 **Portefeuille actuel :** {p['cash']:,} €", parse_mode="Markdown")
 
 async def work(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     p = get_player(u.id, u.first_name)
-    now = datetime.now()
-
-    if p['last_work']:
-        delta = now - p['last_work']
-        if delta < timedelta(hours=5):
-            remaining = timedelta(hours=5) - delta
-            hours, remainder = divmod(remaining.seconds, 3600)
-            minutes, seconds = divmod(remainder, 60)
-            await update.message.reply_text(
-                f"⏳ **Tu es épuisé par le travail !**\n\n"
-                f"Tu dois attendre encore **{hours}h {minutes}m {seconds}s** avant de pouvoir exécuter la commande `/work` à nouveau.",
-                parse_mode="Markdown"
-            )
-            return
-
     base_pay = random.randint(15000, 35000)
-    diplome_multiplier = 1.0 + (len(p['diplomes']) * 0.3)
-    total_gagne = int(base_pay * diplome_multiplier)
-
+    multiplier = 1.0 + (len(p['diplomes']) * 0.4)
+    total_gagne = int(base_pay * multiplier)
     p['cash'] += total_gagne
-    p['last_work'] = now
-    p['work_count'] += 1
-
-    jobs = ["Développeur", "Manager", "Trader", "Directeur Financier", "Consultant", "Avocat"]
-    job_actuel = random.choice(jobs)
-
-    msg = (
-        f"🛠️ **RAPPORT DE TRAVAIL — EMPIRE CITY**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 **Employé :** {u.first_name}\n"
-        f"💼 **Poste occupé :** {job_actuel}\n"
-        f"💵 **Salaire de base :** {base_pay:,} $\n"
-        f"🎓 **Bonus Diplômes ({len(p['diplomes'])}) :** +{int((diplome_multiplier-1)*100)}%\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 **Revenu total crédité :** +{total_gagne:,} $\n"
-        f"💳 **Nouveau solde cash :** {p['cash']:,} $\n\n"
-        f"⏰ Prochaine session disponible dans **5 heures**."
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(f"🛠️ Travail effectué ! Tu as gagné **+{total_gagne:,} €**.", parse_mode="Markdown")
 
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = get_player(update.effective_user.id)
-    now = datetime.now()
-    if p['last_daily'] and (now - p['last_daily']) < timedelta(days=1):
-        await update.message.reply_text("❌ Tu as déjà récupéré ton bonus quotidien aujourd'hui !")
-        return
     bonus = 100000
     p['cash'] += bonus
-    p['last_daily'] = now
-    await update.message.reply_text(f"🎁 **Bonus Quotidien Récolté !**\n\n💰 **+{bonus:,} $** ajoutés à votre portefeuille.")
+    await update.message.reply_text(f"🎁 **+{bonus:,} €** ajoutés à votre portefeuille.")
 
-# --- IMMOBILIER AVEC BOUTONS INTERACTIFS ---
+# --- SYSTÈME DES DIPLÔMES (QCM) ---
 
-async def immobilier(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🏡 Studio — 5 000$ (450$/h)", callback_data='buy_studio')],
-        [InlineKeyboardButton("🏢 Appartement — 20 000$ (1 800$/h)", callback_data='buy_appartement')],
-        [InlineKeyboardButton("🏡 Maison — 60 000$ (5 400$/h)", callback_data='buy_maison')],
-        [InlineKeyboardButton("🏰 Villa de luxe — 200 000$ (18 000$/h)", callback_data='buy_villa')],
-        [InlineKeyboardButton("🏙️ Immeuble — 750 000$ (66 000$/h)", callback_data='buy_immeuble')]
-    ]
+async def diplome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    p = get_player(u.id, u.first_name)
+
+    keyboard = []
+    for code, dom in DOMAINES_DIPLOMES.items():
+        status = "✅ Obtenu" if dom['nom'] in p['diplomes'] else "❌ À passer"
+        keyboard.append([InlineKeyboardButton(f"{dom['nom']} ({status})", callback_data=f"exam_{code}")])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     await update.message.reply_text(
-        "🏠 **Marché immobilier d'Empire City**\n\n"
-        "Choisis un bien à acheter :",
+        "🎓 **Centre des Examens d'Empire City**\n\n"
+        "Choisis un domaine ci-dessous pour passer ton examen :",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
+# --- SYSTÈME DE LA MAIRIE (CONTRÔLE TOTAL) ---
+
+async def mairie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = (
+        "🏛️ **Hôtel de Ville d'Empire City**\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👑 **Maire Actuel :** {mairie_state['maire_nom']}\n"
+        f"💰 **Caisse de la Ville :** {mairie_state['caisse_ville']:,} €\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 *Le maire est désigné par l'Autorité Suprême (l'Owner).* "
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def setmaire(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Commande réservée au propriétaire suprême.")
+        return
+    try:
+        target_id = int(context.args[0])
+        target_player = get_player(target_id)
+        
+        mairie_state['maire_id'] = target_id
+        mairie_state['maire_nom'] = target_player['name']
+        
+        log_trans(f"L'Owner a nommé {target_player['name']} ({target_id}) comme Maire.")
+        await update.message.reply_text(
+            f"👑 **Nomination réussie !**\n"
+            f"Le joueur **{target_player['name']}** (`{target_id}`) est officiellement le nouveau Maire d'Empire City.",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await update.message.reply_text("⚠️ **Usage incorrect :** `/setmaire <user_id>`\n*(Assure-toi que le joueur a déjà interagi avec le bot au moins une fois)*", parse_mode="Markdown")
+
+# --- GESTION DES CLICS DE BOUTONS (Examens) ---
+
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     u = query.from_user
     p = get_player(u.id, u.first_name)
     data = query.data
 
-    if data.startswith("buy_"):
-        key = data.replace("buy_", "")
-        if key in IMMOBILIER_SHOP:
-            item = IMMOBILIER_SHOP[key]
-            if p['cash'] < item['prix']:
-                await query.message.reply_text(f"❌ Solde insuffisant ! Il vous faut **{item['prix']:,} $** pour acheter un **{item['nom']}**.")
-            else:
-                p['cash'] -= item['prix']
-                p['immobilier'].append(item['nom'])
-                log_trans(f"{u.first_name} a acheté {item['nom']} pour {item['prix']}$")
+    if data.startswith("exam_"):
+        code_domaine = data.replace("exam_", "")
+        dom = DOMAINES_DIPLOMES[code_domaine]
+
+        if dom['nom'] in p['diplomes']:
+            await query.message.reply_text(f"✅ Tu possèdes déjà le diplôme en **{dom['nom']}** !")
+            return
+
+        p['active_exam'] = {'domaine': code_domaine, 'q_index': 0, 'score': 0}
+        await poser_question_examen(query.message, p)
+
+    elif data.startswith("ans_"):
+        exam = p.get('active_exam')
+        if not exam:
+            await query.message.reply_text("❌ Aucun examen en cours.")
+            return
+
+        choix_fait = int(data.replace("ans_", ""))
+        dom = DOMAINES_DIPLOMES[exam['domaine']]
+        question_actuelle = dom['questions'][exam['q_index']]
+
+        if choix_fait == question_actuelle['correct']:
+            exam['score'] += 1
+
+        exam['q_index'] += 1
+
+        if exam['q_index'] < len(dom['questions']):
+            await poser_question_examen(query.message, p)
+        else:
+            score_final = exam['score']
+            total_questions = len(dom['questions'])
+            p['active_exam'] = None
+
+            if score_final >= 2:
+                if dom['nom'] not in p['diplomes']:
+                    p['diplomes'].append(dom['nom'])
                 await query.message.reply_text(
-                    f"🎉 **Félicitations !** Tu as acheté un **{item['nom']}** pour **{item['prix']:,} $** !\n"
-                    f"📈 Revenu généré : **+{item['loyer']:,} $/h**.\n"
-                    f"Utilise la commande `/loyer` pour collecter tes revenus.",
+                    f"🎉 **EXAMEN RÉUSSI !**\n"
+                    f"Domaine : **{dom['nom']}** | Score : **{score_final}/{total_questions}**\n"
+                    f"🎓 Diplôme obtenu !",
                     parse_mode="Markdown"
                 )
+            else:
+                await query.message.reply_text(
+                    f"❌ **EXAMEN ÉCHOUÉ...** ({score_final}/{total_questions}). Réessaie avec `/diplome`."
+                )
 
-async def loyer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    p = get_player(u.id, u.first_name)
+async def poser_question_examen(message, p):
+    exam = p['active_exam']
+    dom = DOMAINES_DIPLOMES[exam['domaine']]
+    q_data = dom['questions'][exam['q_index']]
 
-    if not p['immobilier']:
-        await update.message.reply_text("🏠 Vous ne possédez aucun bien immobilier pour le moment.")
-        return
+    keyboard = []
+    for idx, option in enumerate(q_data['options']):
+        keyboard.append([InlineKeyboardButton(option, callback_data=f"ans_{idx}")])
 
-    tot_loyer = 0
-    lines = []
-    for idx, bien in enumerate(p['immobilier'], 1):
-        valeur_loyer = 5000
-        for item in IMMOBILIER_SHOP.values():
-            if item['nom'] in bien:
-                valeur_loyer = item['loyer'] * 5
-                break
-        tot_loyer += valeur_loyer
-        lines.append(f"{bien} #{idx} — +{valeur_loyer:,}$")
-
-    p['cash'] += tot_loyer
-    details_str = "\n".join(lines[:10])
-    
-    await update.message.reply_text(
-        f"💰 **Loyers collectés : +{tot_loyer:,}$**\n\n"
-        f"{details_str}\n\n"
-        f"🏦 Versés dans la trésorerie de **{u.first_name}**",
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await message.edit_text(
+        f"📝 **Examen : {dom['nom']}**\n"
+        f"Question {exam['q_index'] + 1} / {len(dom['questions'])}\n\n"
+        f"❓ *{q_data['q']}*",
+        reply_markup=reply_markup,
         parse_mode="Markdown"
     )
 
-# --- SYSTEME BANCAIRE ---
+# --- ENTREPRISES ---
 
-async def bank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    txt = (
-        "🏦 **Banques d'Empire City**\n━━━━━━━━━━━━━━━━━━━━━\n"
-        "🥉 **Death** — Taux : 5.0% / 6h\n"
-        "💎 **Life** — Taux : 1.0% / 6h\n"
-        "🥈 **Nova** — Taux : 2.5% / 6h\n━━━━━━━━━━━━━━━━━━━━━\n"
-        "Ouvrir un compte : `/openbank <banque>`"
-    )
-    await update.message.reply_text(txt, parse_mode="Markdown")
+async def creerboite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    p = get_player(u.id, u.first_name)
 
-async def openbank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    p = get_player(update.effective_user.id)
-    if not context.args:
-        await update.message.reply_text("⚠️ Usage : `/openbank Death` (ou Life, Nova)")
+    if p['entreprise']:
+        await update.message.reply_text("❌ Tu possèdes déjà une entreprise !")
         return
-    bname = context.args[0].capitalize()
-    if bname in p['banks']:
-        await update.message.reply_text(f"✅ Ton compte **{bname}** est actif !")
-    else:
-        await update.message.reply_text("❌ Choisissez une banque valide : Death, Life, Nova.")
 
-async def depositbank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    p = get_player(update.effective_user.id)
-    try:
-        amt = int(context.args[0])
-        bname = context.args[1].capitalize()
-        if bname not in p['banks']:
-            await update.message.reply_text("❌ Banque inexistante.")
-            return
-        if p['cash'] < amt:
-            await update.message.reply_text("❌ Solde cash insuffisant.")
-            return
-        p['cash'] -= amt
-        p['banks'][bname] += amt
-        await update.message.reply_text(f"💳 Dépôt réussi de **{amt:,} $** sur **{bname}**.")
-    except:
-        await update.message.reply_text("⚠️ Usage : `/depositbank <montant> <banque>`")
+    if not p['diplomes']:
+        await update.message.reply_text("🎓 **Refusé !** Tu dois obtenir au moins un diplôme via `/diplome` avant de créer une entreprise.")
+        return
 
-async def withdrawbank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    p = get_player(update.effective_user.id)
-    try:
-        amt = int(context.args[0])
-        bname = context.args[1].capitalize()
-        if p['banks'].get(bname, 0) < amt:
-            await update.message.reply_text("❌ Solde bancaire insuffisant.")
-            return
-        p['banks'][bname] -= amt
-        p['cash'] += amt
-        await update.message.reply_text(f"💵 Retrait de **{amt:,} $** de votre compte **{bname}**.")
-    except:
-        await update.message.reply_text("⚠️ Usage : `/withdrawbank <montant> <banque>`")
+    PRIX_CREATION = 5000000
+    if p['cash'] < PRIX_CREATION:
+        await update.message.reply_text(f"❌ Il te faut **5 000 000 €** en cash. Solde : **{p['cash']:,} €**")
+        return
 
-async def balancebank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    p = get_player(update.effective_user.id)
-    tot = sum(p['banks'].values())
-    msg = (
-        f"🏦 **Tes comptes bancaires**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🥉 **Death** : {p['banks']['Death']:,} $ | Taux: 5.0% / 6h\n"
-        f"💎 **Life** : {p['banks']['Life']:,} $ | Taux: 1.0% / 6h\n"
-        f"🥈 **Nova** : {p['banks']['Nova']:,} $ | Taux: 2.5% / 6h\n"
-        f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 **Total en banque : {tot:,} $**"
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    if not context.args:
+        await update.message.reply_text("⚠️ Usage : `/creerboite NomDeTonEntreprise`")
+        return
 
-# --- INTERACTIONS SOCIALES ET ACCEPTATIONS ---
+    nom_boite = context.args[0]
+    p['cash'] -= PRIX_CREATION
+    p['entreprise'] = {'nom': nom_boite, 'tresorerie': 0, 'valeur': 0, 'employes': 0, 'salaire': 0}
 
-async def acceptfriend(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤝 Demande d'ami acceptée avec succès !")
-
-async def acceptmarry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💍 **Félicitations !** Vous êtes désormais mariés !")
-
-async def acceptadopt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👨‍👩‍👧 **Adoption validée !** L'enfant est désormais intégré à la famille.")
-
-# --- ENTREPRISES & CLASSEMENTS ---
+    await update.message.reply_text(f"🎉 Entreprise **{nom_boite}** créée pour **5 000 000 €** !")
 
 async def monentreprise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = get_player(update.effective_user.id)
-    msg = (
-        f"🏢 **「 🛒 」 {p['entreprise'] if p['entreprise'] else 'Omzo Corp'}**\n"
-        f"✨ **Startup** | ⭐ 3.0/5\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 **VALEUR :** 62.83B $\n"
-        f"🏦 **TRÉSORERIE :** 62.83B $\n"
-        f"📈 **TON SALAIRE/JOUR :** 0 $/jour\n"
-        f"👥 **ÉQUIPE :** 8/200 employés\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🌐 **TON POSTE :** 👑 PDG"
-    )
+    ent = p.get('entreprise')
+    if not ent:
+        await update.message.reply_text("🏢 Tu n'as pas d'entreprise. Utilise `/creerboite <nom>`.")
+        return
+    msg = f"🏢 **{ent['nom']}**\n💰 Trésorerie : {ent['tresorerie']:,} €\n📈 Salaire fixé : {ent.get('salaire', 0):,} €/jour"
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-async def richlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    sorted_p = sorted(joueurs.items(), key=lambda x: x[1]['cash'] + sum(x[1]['banks'].values()), reverse=True)[:10]
-    msg = "🏆 **FORTUNE RANKING — EMPIRE CITY** 🏆\n━━━━━━━━━━━━━━━━━━━━━\n"
-    for idx, (uid, p) in enumerate(sorted_p, 1):
-        tot = p['cash'] + sum(p['banks'].values())
-        msg += f"{idx}. **{p['name']}** ➔ {tot:,} $\n"
-    await update.message.reply_text(msg, parse_mode="Markdown")
+async def setsalaire(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    p = get_player(update.effective_user.id)
+    ent = p.get('entreprise')
+    if not ent:
+        await update.message.reply_text("❌ Tu n'as pas d'entreprise.")
+        return
+    try:
+        montant = int(context.args[0])
+        ent['salaire'] = montant
+        await update.message.reply_text(f"✅ Salaire journalier fixé à **{montant:,} €**.")
+    except:
+        await update.message.reply_text("⚠️ Usage : `/setsalaire <montant>`")
 
-# --- PANEL OWNER DE EMPIRE CITY ---
+async def versesalaire(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    p = get_player(update.effective_user.id)
+    ent = p.get('entreprise')
+    if not ent:
+        await update.message.reply_text("❌ Tu n'as pas d'entreprise.")
+        return
+    salaire = ent.get('salaire', 0)
+    if ent['tresorerie'] < salaire:
+        await update.message.reply_text("❌ Trésorerie insuffisante.")
+        return
+    ent['tresorerie'] -= salaire
+    p['cash'] += salaire
+    await update.message.reply_text(f"💸 Versement de **{salaire:,} €** effectué !")
+
+# --- PANEL OWNER ---
 
 async def owner(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     panel = (
-        "👑 **Panel Owner — Empire City**\n\n"
-        "💰 `/addmoney id montant` — Ajouter au cash\n"
-        "💸 `/removemoney id montant` — Retirer du cash\n"
-        "🏦 `/addbanque id montant` — Ajouter en banque\n"
-        "🏛️ `/removebanque id montant` — Retirer de la banque\n"
-        "🏢 `/addboite nom_entreprise montant` — Ajouter à la trésorerie\n"
-        "🏢 `/removeboite nom_entreprise montant` — Retirer de la trésorerie\n"
-        "🗡️ `/ban id [raison]` — Bannir un joueur\n"
+        "👑 **Panel Owner — Contrôle Total**\n\n"
+        "🏛️ `/setmaire <id>` — Nommer directement le maire\n"
+        "💰 `/addmoney id montant` — Ajouter de l'argent\n"
+        "💸 `/removemoney id montant` — Retirer de l'argent\n"
+        "🗡️ `/ban id` — Bannir un joueur\n"
         "✅ `/unban id` — Débannir un joueur\n"
-        "📋 `/listeban [page]` — Liste des joueurs bannis\n"
-        "🏢 `/dissoudre nom_entreprise` — Dissoudre une entreprise\n"
-        "👑 `/forcenommer nom_entreprise poste` — Forcer nomination\n"
-        "🎓 `/setdiplome id secteur palier` — Accorder un diplôme\n"
-        "🎓 `/retirerdiplome id secteur palier` — Retirer un diplôme\n"
-        "🔄 `/resetrecrutement nom_entreprise` — Lever le cooldown\n"
-        "🏛️ `/etatresor` — Voir le solde du fonds État\n"
-        "💸 `/utiliserimpots id_ou_pseudo montant [raison]` — Dépenser le fonds État\n"
-        "🔓 `/debannirtous` — Débannir tous les joueurs d'un coup\n\n"
-
-        "🏛️ ***Mairie de EMPIRE CITY***\n"
-        "🏛️ `/villescaisses` — Voir la caisse municipale\n"
-        "💰 `/addcaisseville montant` — Ajouter à la caisse municipale\n"
-        "💸 `/removecaisseville montant` — Retirer de la caisse municipale\n"
-        "📥 `/ouvrirelection` — Ouvrir une élection municipale (48h)\n"
-        "🗳️ `/cloturerelection` — Clôturer le vote\n"
-        "👑 `/trancherelection id_ou_pseudo` — Désigner le maire élu\n"
-        "📊 `/votesmaire` — Voir le détail des votes\n"
-        "⛔ `/revoquermaire` — Révoquer le maire en poste\n"
-        "📣 `/lancervote @c1 @c2 [...]` — Poster le vote à boutons\n"
-        "👤 `/nommercommission id_ou_pseudo` — Nommer le président\n"
-        "🚫 `/retirercandidat id_ou_pseudo` — Retirer un joueur de l'élection\n\n"
-
-        "📈 ***Économie de masse (tous les joueurs)***\n"
-        "💰 `/addmoneyall montant` — Ajouter au solde de tous\n"
-        "💸 `/removemoneyall montant` — Retirer du solde de tous\n"
-        "🏦 `/addbanqueall montant` — Ajouter en banque à tous\n"
-        "🏛️ `/removebanqueall montant` — Retirer en banque à tous\n"
-        "🔄 `/resetmoneyall [montant]` — Fixer le solde de tous\n"
-        "🔄 `/resetbanqueall [montant]` — Fixer la banque de tous\n"
-        "📊 `/fixparts nom_entreprise` — Normaliser les parts à 100%\n\n"
-
-        "👤 ***Gestion des administrateurs***\n"
-        "👥 `/setadmin id` — Nommer un admin\n"
-        "❌ `/unsetadmin id` — Retirer un admin\n"
-        "📋 `/listadmins` — Liste des admins\n\n"
-
-        "👥 ***Gestion des joueurs***\n"
-        "📜 `/listejoueurs [page]` — Liste tous les joueurs\n"
-        "🎓 `/listediplomes [page]` — Liste des diplômes\n"
-        "🔍 `/recherchejoueur <nom>` — Rechercher un joueur\n\n"
-
-        "📜 ***Historique & Surveillance***\n"
-        "📜 `/historique [nb|tout]` — Dernières transactions\n"
-        "👤 `/histojoueur id [nb]` — Transactions d'un joueur\n"
-        "🐳 `/baleines [nb]` — Joueurs les plus riches"
+        "📜 `/historique` — Voir l'historique des actions"
     )
     await update.message.reply_text(panel, parse_mode="Markdown")
-
-# LOGIQUE DES COMMANDES DU PANEL OWNER
 
 async def addmoney(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
@@ -489,9 +379,9 @@ async def addmoney(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid, amt = int(context.args[0]), int(context.args[1])
         p = get_player(uid)
         p['cash'] += amt
-        log_trans(f"Admin a ajouté {amt}$ au cash de {uid}")
-        await update.message.reply_text(f"✅ **+{amt:,} $** ajoutés au joueur `{uid}`.", parse_mode="Markdown")
-    except: await update.message.reply_text("Usage : `/addmoney <id> <montant>`", parse_mode="Markdown")
+        log_trans(f"Admin a ajouté {amt}€ à {uid}")
+        await update.message.reply_text(f"✅ **+{amt:,} €** ajoutés.")
+    except: await update.message.reply_text("Usage : `/addmoney <id> <montant>`")
 
 async def removemoney(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
@@ -499,87 +389,37 @@ async def removemoney(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid, amt = int(context.args[0]), int(context.args[1])
         p = get_player(uid)
         p['cash'] = max(0, p['cash'] - amt)
-        log_trans(f"Admin a retiré {amt}$ au cash de {uid}")
-        await update.message.reply_text(f"✅ **-{amt:,} $** retirés au joueur `{uid}`.", parse_mode="Markdown")
-    except: await update.message.reply_text("Usage : `/removemoney <id> <montant>`", parse_mode="Markdown")
-
-async def addmoneyall(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    try:
-        amt = int(context.args[0])
-        for p in joueurs.values(): p['cash'] += amt
-        log_trans(f"Admin a ajouté {amt}$ à TOUS les joueurs")
-        await update.message.reply_text(f"✅ **+{amt:,} $** ajoutés au cash de TOUS les joueurs !", parse_mode="Markdown")
-    except: await update.message.reply_text("Usage : `/addmoneyall <montant>`", parse_mode="Markdown")
-
-async def removemoneyall(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    try:
-        amt = int(context.args[0])
-        for p in joueurs.values(): p['cash'] = max(0, p['cash'] - amt)
-        log_trans(f"Admin a retiré {amt}$ à TOUS les joueurs")
-        await update.message.reply_text(f"✅ **-{amt:,} $** retirés du cash de TOUS les joueurs !", parse_mode="Markdown")
-    except: await update.message.reply_text("Usage : `/removemoneyall <montant>`", parse_mode="Markdown")
+        log_trans(f"Admin a retiré {amt}€ à {uid}")
+        await update.message.reply_text(f"✅ **-{amt:,} €** retirés.")
+    except: await update.message.reply_text("Usage : `/removemoney <id> <montant>`")
 
 async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     try:
         uid = int(context.args[0])
         banned_users.add(uid)
-        log_trans(f"Joueur {uid} banni")
-        await update.message.reply_text(f"🚫 **Joueur {uid} banni avec succès.**", parse_mode="Markdown")
-    except: await update.message.reply_text("Usage : `/ban <id>`", parse_mode="Markdown")
+        await update.message.reply_text(f"🚫 Joueur `{uid}` banni.", parse_mode="Markdown")
+    except: await update.message.reply_text("Usage : `/ban <id>`")
 
 async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     try:
         uid = int(context.args[0])
         banned_users.discard(uid)
-        log_trans(f"Joueur {uid} débanni")
-        await update.message.reply_text(f"✅ **Joueur {uid} débanni avec succès.**", parse_mode="Markdown")
-    except: await update.message.reply_text("Usage : `/unban <id>`", parse_mode="Markdown")
-
-async def listeban(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text(f"📋 **Joueurs bannis :** {list(banned_users)}")
-
-async def debannirtous(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    banned_users.clear()
-    log_trans("Tous les joueurs ont été débannis")
-    await update.message.reply_text("🔓 **Tous les joueurs d'Empire City ont été débannis !**")
-
-async def villescaisses(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text(f"🏛️ **Caisse Municipale Empire City :** {caisse_ville:,} $")
-
-async def etatresor(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    await update.message.reply_text(f"🏛️ **Fonds d'État (Trésor Public) :** {etat_tresor:,} $")
-
-async def baleines(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id): return
-    sorted_p = sorted(joueurs.items(), key=lambda x: x[1]['cash'] + sum(x[1]['banks'].values()), reverse=True)[:5]
-    txt = "🐳 **TOP 5 BALEINES DE EMPIRE CITY**\n━━━━━━━━━━━━━━━━━━━━━\n"
-    for idx, (uid, p) in enumerate(sorted_p, 1):
-        txt += f"{idx}. ID `{uid}` ({p['name']}) ➔ {p['cash'] + sum(p['banks'].values()):,} $\n"
-    await update.message.reply_text(txt, parse_mode="Markdown")
+        await update.message.reply_text(f"✅ Joueur `{uid}` débanni.", parse_mode="Markdown")
+    except: await update.message.reply_text("Usage : `/unban <id>`")
 
 async def historique(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id): return
     logs = historique_transactions[-15:]
-    msg = "📜 **Dernières Transactions Empire City**\n━━━━━━━━━━━━━━━━━━━━━\n" + "\n".join(logs) if logs else "Aucun historique."
+    msg = "📜 **Dernières Transactions**\n" + "\n".join(logs) if logs else "Aucun historique."
     await update.message.reply_text(msg)
 
 # --- PROGRAMME PRINCIPAL ---
 
 if __name__ == '__main__':
-    # Démarre le serveur Web en arrière-plan pour Render
-    keep_alive()
-
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Handlers Utilisateurs & Économie
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("me", me))
@@ -587,41 +427,27 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("work", work))
     app.add_handler(CommandHandler("daily", daily))
 
-    # Immobilier & Loyers
-    app.add_handler(CommandHandler("immobilier", immobilier))
-    app.add_handler(CommandHandler("loyer", loyer))
+    # Diplômes & Boutons
+    app.add_handler(CommandHandler("diplome", diplome))
     app.add_handler(CallbackQueryHandler(button_click))
 
-    # Banque
-    app.add_handler(CommandHandler("bank", bank))
-    app.add_handler(CommandHandler("openbank", openbank))
-    app.add_handler(CommandHandler("depositbank", depositbank))
-    app.add_handler(CommandHandler("withdrawbank", withdrawbank))
-    app.add_handler(CommandHandler("balancebank", balancebank))
+    # Mairie (Contrôle Owner)
+    app.add_handler(CommandHandler("mairie", mairie))
+    app.add_handler(CommandHandler("setmaire", setmaire))
 
-    # Socials
-    app.add_handler(CommandHandler("acceptfriend", acceptfriend))
-    app.add_handler(CommandHandler("acceptmarry", acceptmarry))
-    app.add_handler(CommandHandler("acceptadopt", acceptadopt))
-
-    # Entreprises & Top
+    # Entreprises
+    app.add_handler(CommandHandler("creerboite", creerboite))
     app.add_handler(CommandHandler("monentreprise", monentreprise))
-    app.add_handler(CommandHandler("richlist", richlist))
+    app.add_handler(CommandHandler("setsalaire", setsalaire))
+    app.add_handler(CommandHandler("versesalaire", versesalaire))
 
-    # Panel Admin / Owner Empire City
+    # Panel Owner
     app.add_handler(CommandHandler("owner", owner))
     app.add_handler(CommandHandler("addmoney", addmoney))
     app.add_handler(CommandHandler("removemoney", removemoney))
-    app.add_handler(CommandHandler("addmoneyall", addmoneyall))
-    app.add_handler(CommandHandler("removemoneyall", removemoneyall))
     app.add_handler(CommandHandler("ban", ban))
     app.add_handler(CommandHandler("unban", unban))
-    app.add_handler(CommandHandler("listeban", listeban))
-    app.add_handler(CommandHandler("debannirtous", debannirtous))
-    app.add_handler(CommandHandler("villescaisses", villescaisses))
-    app.add_handler(CommandHandler("etatresor", etatresor))
-    app.add_handler(CommandHandler("baleines", baleines))
     app.add_handler(CommandHandler("historique", historique))
 
-    print("Bot Empire City / Empire Mafia démarré avec succès !")
+    print("Bot Empire City configuré avec contrôle total administrateur !")
     app.run_polling()
