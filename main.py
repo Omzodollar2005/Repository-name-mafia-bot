@@ -20,7 +20,7 @@ def run_web():
     app_web.run(host='0.0.0.0', port=port)
 
 def keep_alive():
-    t = Thread(target=run_web)
+    t = Thread(target=run_web) 
     t.start()
 
 # --- CONFIGURATION ---
