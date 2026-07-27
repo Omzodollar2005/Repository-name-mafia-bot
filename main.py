@@ -565,4 +565,4 @@ if __name__ == '__main__':
         app.add_handler(CommandHandler(cmd, func))
 
     print("BOT MIS A JOUR V2 OK !")
-    app.run_polling()
+    app.run_polling() 
