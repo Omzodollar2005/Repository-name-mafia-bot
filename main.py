@@ -117,9 +117,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     h = (
         "📜 **GUIDE COMPLET — MAFIA CITY**\n\n"
         "👤 `/me` — Profil & Infos\n"
-        "🏦 `/banque` — Gérer vos 3 comptes\n"
+        "🏦 `/banque` — Gérer vos comptes\n"
         "🎓 `/diplome` — Passer vos diplômes\n"
-        "🏢 `/creerboite <nom>` — Entreprise\n"
+        "🏢 `/creerboite <nom>` — Entreprise (5M€ + Diplôme requis)\n"
         "🛍️ `/boutique` & `/inventaire` — Équipement\n"
         "🎰 `/casino` — Jeux d'argent\n"
         "🥷 `/crimes` — Faire des coups\n"
@@ -160,22 +160,27 @@ async def creerboite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
     p = get_player(u.id, u.first_name)
     if not p: return
+    
     if p['entreprise']:
-        await update.message.reply_text("❌ Tu as déjà une entreprise.")
+        await update.message.reply_text("❌ Tu possèdes déjà une entreprise.")
         return
+        
     if not p['diplomes']:
-        await update.message.reply_text("❌ Il te faut un diplôme d'abord (/diplome).")
+        await update.message.reply_text("❌ Il te faut obligatoirement au moins un diplôme avant de créer une entreprise ! Passe par `/diplome`.")
         return
+        
     if p['cash'] < 5000000:
-        await update.message.reply_text("❌ Il faut 5 000 000 € en cash.")
+        await update.message.reply_text(f"❌ Fonds insuffisants. Il te faut 5 000 000 € en cash (Tu as {p['cash']:,} €).")
         return
+        
     if not context.args:
-        await update.message.reply_text("⚠️ Usage : `/creerboite <Nom>`")
+        await update.message.reply_text("⚠️ Usage correct : `/creerboite NomDeVotreEntreprise`")
         return
+        
     nom = context.args[0]
     update_player(u.id, 'cash', p['cash'] - 5000000)
     update_player(u.id, 'entreprise', nom)
-    await update.message.reply_text(f"🎉 Entreprise **{nom}** créée !")
+    await update.message.reply_text(f"🎉 Félicitations ! Ton entreprise **{nom}** a été fondée avec succès pour 5 000 000 €.")
 
 async def boutique(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🛍️ **Boutique Noire**\n- Armes et gilets disponibles.")
@@ -306,5 +311,5 @@ if __name__ == '__main__':
     for name, func in cmds:
         app.add_handler(CommandHandler(name, func))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    print("Mafia City Complet démarré !")
+    print("Mafia City Complet et corrigé démarré !")
     app.run_polling()
