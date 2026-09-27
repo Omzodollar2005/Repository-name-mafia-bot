@@ -91,7 +91,6 @@ async def pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if not context.args or len(context.args) < 2:
     await update.message.reply_text("Utilisation : /pay @user montant")
     return
-  # Logique de transfert d'argent entre joueurs
   await update.message.reply_text("💸 Transfert effectué avec succès.")
 
 
@@ -402,8 +401,11 @@ async def buyitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-  # Remplace "TON_TOKEN_ICI" par le token fourni par BotFather
-  app = ApplicationBuilder().token("TON_TOKEN_ICI").build()
+  app = (
+      ApplicationBuilder()
+      .token("8027243153:AAGJleVVHIt5QYouPSUuOd025MKPzYjJHtM")
+      .build()
+  )
 
   # Profil & Économie
   app.add_handler(CommandHandler("start", start))
